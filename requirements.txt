@@ -1,0 +1,3 @@
+# Core dependencies (Tkinter & sqlite3 are built into standard Python on Windows)
+pywin32>=306
+pyinstaller>=6.0.0

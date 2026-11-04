@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+*.spec
+
+# PyInstaller
+*.manifest
+package_build/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Local monitor runtime state & logs (do not commit user history)
+monitor_state.json
+monitor_debug.log
+*.tmp
+*.csv
+synology_drive_errors_*.csv
