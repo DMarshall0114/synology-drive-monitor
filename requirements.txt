@@ -1,3 +1,2 @@
-# Core dependencies (Tkinter & sqlite3 are built into standard Python on Windows)
-pywin32>=306
-pyinstaller>=6.0.0
+# 运行时只需 Python 3.10+ 标准库（tkinter / sqlite3 均随 Windows 版 Python 自带），无第三方依赖。
+# 开发与打包依赖见 requirements-dev.txt。

@@ -1,0 +1,16 @@
+# 本项目以单文件脚本 / PyInstaller exe 形式分发，这里只放工具链配置。
+# 运行依赖见 requirements.txt，开发依赖见 requirements-dev.txt。
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+src = [".", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# 行宽交给 ruff format；中文字符串按双倍宽度计，长提示语无法再拆
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

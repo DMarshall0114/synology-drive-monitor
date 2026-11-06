@@ -33,3 +33,7 @@ monitor_debug.log
 *.tmp
 *.csv
 synology_drive_errors_*.csv
+
+# Dev tooling
+.pytest_cache/
+.ruff_cache/
