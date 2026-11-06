@@ -36,6 +36,12 @@ def done(i: int, sync: int = 2) -> str:
     return f"2026-11-06T10:00:01 [INFO] DoneEvent: Event<LocalModify> sync_id: {sync} path: 'C:\\Docs\\f{i}.docx'\n"
 
 
+@pytest.fixture(autouse=True)
+def _fake_process_running(monkeypatch):
+    # 合成日志测试不应依赖宿主机上是否真的运行着群晖客户端
+    monkeypatch.setattr(core, "process_state", lambda force=False: "运行中")
+
+
 @pytest.fixture
 def base(tmp_path: Path) -> Path:
     b = tmp_path / "SynologyDrive"
@@ -276,7 +282,8 @@ def test_sqlite_ro_rejects_writes(base):
 
 
 def test_sqlite_ro_handles_special_chars_in_path(tmp_path):
-    d = tmp_path / "a#b ?c %20"
+    name = "a#b c %20" if sys.platform == "win32" else "a#b ?c %20"
+    d = tmp_path / name
     d.mkdir()
     p = d / "h.sqlite"
     sqlite3.connect(p).close()
