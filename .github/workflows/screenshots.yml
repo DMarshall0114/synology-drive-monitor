@@ -1,0 +1,27 @@
+name: Screenshots
+
+# 在真实的 Windows 桌面上用演示数据启动界面并截图，结果作为 artifact 下载。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/make_screenshots.py"
+      - ".github/workflows/screenshots.yml"
+
+jobs:
+  screenshots:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow
+      - name: Use a 1920x1080 desktop
+        shell: pwsh
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+      - run: python tools/make_screenshots.py screenshots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots
