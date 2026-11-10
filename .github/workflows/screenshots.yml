@@ -8,6 +8,9 @@ on:
       - "tools/make_screenshots.py"
       - ".github/workflows/screenshots.yml"
 
+permissions:
+  contents: write  # 把截图推到独立的 screenshots 分支，方便直接用 git / raw 链接取用
+
 jobs:
   screenshots:
     runs-on: windows-latest
@@ -25,3 +28,13 @@ jobs:
         with:
           name: screenshots
           path: screenshots
+      - name: Publish to the screenshots branch
+        shell: bash
+        run: |
+          cd screenshots
+          git init -q -b screenshots
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "screenshots for ${GITHUB_SHA}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" screenshots
