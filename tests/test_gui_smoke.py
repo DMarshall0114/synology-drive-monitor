@@ -22,7 +22,9 @@ def base(tmp_path: Path, monkeypatch) -> Path:
     (b / "log").mkdir(parents=True)
     (b / "data" / "db").mkdir(parents=True)
     (b / "log" / "daemon.log").write_text(
-        "2026-11-06T10:00:00 PushEvent = Event<X> sync_id: 1 path: 'C:\\Docs\\a.docx'\n", encoding="utf-8"
+        "2026-11-06T10:00:00 PushEvent = Event<X> sync_id: 1 path: 'C:\\Docs\\a.docx'\n"
+        "2026-11-06T10:00:01 (1:2) [ERROR] proto-client.cpp(88): Failed to connect 'nas' code 110\n",
+        encoding="utf-8",
     )
     con = sqlite3.connect(b / "data" / "db" / "history.sqlite")
     con.execute(
@@ -48,6 +50,24 @@ def test_cli_missing_base(tmp_path, capsys):
     assert gui.main(["--json", "--base", str(tmp_path / "nope")]) == 2
 
 
+def test_cli_fail_on(base, capsys):
+    assert gui.main(["--json", "--base", str(base), "--fail-on", "errors,stalled"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["failed_conditions"] == ["errors"]
+    # 用 warning 而不是 offline：Windows CI 上确实没有运行群晖客户端，offline 会真的命中
+    assert gui.main(["--json", "--base", str(base), "--fail-on", "warning"]) == 0
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        gui.main(["--json", "--base", str(base), "--fail-on", "nonsense"])
+
+
+def test_color_helpers():
+    assert gui.blend("#000000", "#FFFFFF", 0.0) == "#FFFFFF"
+    assert gui.blend("#000000", "#FFFFFF", 1.0) == "#000000"
+    assert gui.shorten_middle("a" * 100, 21) == "a" * 10 + "…" + "a" * 10
+    assert set(gui.PALETTES["light"]) == set(gui.PALETTES["dark"])
+
+
 def test_gui_smoke(base):
     try:
         root = tkinter.Tk()
@@ -70,8 +90,53 @@ def test_gui_smoke(base):
         app._apply_filter()
         assert len(app.err_tree.get_children()) == 2
 
+        # 日志告警页
+        assert len(app.alert_tree.get_children()) == 1
+        assert "Failed to connect" in str(app.alert_tree.item(app.alert_tree.get_children()[0], "values")[-1])
+
+        # 点击表头排序：升序 → 降序 → 恢复默认
+        def paths():
+            return [str(app.recent_tree.item(i, "values")[-1]) for i in app.recent_tree.get_children()]
+
+        default = paths()
+        app._sort_by("recent", "path")
+        assert paths() == sorted(default, key=str.lower)
+        app._sort_by("recent", "path")
+        assert paths() == sorted(default, key=str.lower, reverse=True)
+        app._sort_by("recent", "path")
+        assert paths() == default
+
+        # 筛选对三个页签同时生效，清空后恢复
+        app.search_var.set("bad.xlsx")
+        assert len(app.err_tree.get_children()) == 1 and len(app.recent_tree.get_children()) == 1
+        assert len(app.alert_tree.get_children()) == 0
+        app.search_var.set("")
+        assert len(app.recent_tree.get_children()) == 3
+
+        # 切换主题会重建界面，数据与筛选开关保留
+        for theme in ("dark", "light"):
+            app.theme_var.set(theme)
+            app._apply_theme()
+            assert gui.C.name == theme
+            assert len(app.err_tree.get_children()) == 2  # show_temp 仍为开
+            assert len(app.recent_tree.get_children()) == 3
+
+        app.err_tree.selection_set(app.err_tree.get_children()[0])
+        app.copy_selected(app.err_tree)
+        app.copy_selected(app.err_tree, name_only=True)
+        app.copy_summary()
+        # 次要按钮与表格单元格提示在深浅两套色板下都有定义
+        for theme in ("light", "dark"):
+            assert gui.PALETTES[theme]["control_border"] != gui.PALETTES[theme]["surface"]
+        app._reveal_recent_file(0)  # 没有记录时不应报错
+        app._build_more_menu()  # 只构建不弹出：Windows 上弹出菜单会阻塞到用户关闭
         app.open_diagnostics()
         app.refresh_now()
         root.update()
+
+        # 设置在关闭时落盘
+        app._save_settings()
+        saved = gui.core.load_settings()
+        assert saved["theme"] == "light" and saved["show_temp"] is True
     finally:
         root.destroy()

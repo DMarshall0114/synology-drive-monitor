@@ -5,9 +5,9 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://python.org)
 [![Style: Fluent](https://img.shields.io/badge/Design-Windows%2011%20Fluent-0067C0.svg)]()
 
-A lightweight, non-intrusive, read-only desktop monitoring utility for **Synology Drive Client** on Windows. Built with a modern **Windows 11 Fluent Light** UI.
+A lightweight, non-intrusive, read-only desktop monitoring utility for **Synology Drive Client** on Windows. Built with a modern **Windows 11 Fluent** UI (light & dark).
 
-专为 Windows 群晖客户端（Synology Drive Client）量身打造的高性能、低侵入、**严格只读**同步状态监控工具。采用现代 **Windows 11 Fluent 浅色风格**，提供精准的流式事件吞吐率、在途工作池追踪与同步异常去重分类。
+专为 Windows 群晖客户端（Synology Drive Client）量身打造的高性能、低侵入、**严格只读**同步状态监控工具。采用现代 **Windows 11 Fluent 风格（浅色 / 深色）**，提供精准的流式事件吞吐率、在途工作池追踪与同步异常去重分类。
 
 ---
 
@@ -28,28 +28,42 @@ A lightweight, non-intrusive, read-only desktop monitoring utility for **Synolog
   - Parses `history.sqlite`, excludes normal selective sync rule codes (`-8192`), and automatically separates harmless Office/WPS/LibreOffice lock files (`~$*`, `.~lock.*#`) from true actionable errors.
   - Files that failed once but **synced successfully later** are classified as *recovered* instead of being counted forever. (之后已成功同步的文件归为"已恢复"，不再长期计入异常)
   - Supports one-click CSV export and double-click to locate files in Windows Explorer.
+- 🩺 **Likely-Cause Hints (异常"可能原因"提示)**
+  - For every actionable error the tool inspects the path itself and flags common culprits: path ≥ 260 chars, file name over 143 / 255 bytes, characters Windows forbids, trailing space or dot, reserved names (`CON`, `NUL`…), conflict copies, or a local file that no longer exists.
+  - 这是本工具按路径做的推断，不是群晖给出的结论；界面与 CSV 中都单独成列并标明。
+- 📜 **daemon.log Alerts (日志告警)**
+  - Extracts `[ERROR]` / `[WARNING]` lines from `daemon.log`, merges lines that differ only in file names or numbers, and shows count + last seen time. 连接 / 认证类问题不会进 history.sqlite，在这里能看到。
+- 🗣️ **Plain-Language Summary (一句话结论)**
+  - One sentence under the title says what is going on and whether anything needs attention; the same text is in the JSON snapshot.
+- 🔔 **State-Change Alerts (状态变化提醒)**
+  - Flashes the taskbar button when sync stalls, new errors appear, or sync completes (can be switched off).
 - 🤖 **Headless JSON Mode (无界面 JSON 快照)**
   - `--json [--sample N]` prints a machine-readable status snapshot, handy for scripts, scheduled tasks or agents.
-- 🎨 **Windows 11 Fluent Light Design (原生浅色沉浸体验)**
-  - High-DPI support, clean typography (`Segoe UI Variable`), responsive cards, and dynamic mini sparklines.
+  - `--fail-on stalled,errors` makes the exit code `1` when a condition is hit.
+- 🎨 **Windows 11 Fluent Design, Light & Dark (浅色 / 深色主题)**
+  - Follows the system app mode or can be forced; High-DPI aware, sortable tables, per-minute throughput chart, keyboard shortcuts, remembered window size and options.
 
 ---
 
 ## 📸 Screenshots (界面预览)
 
 ```text
-+-----------------------------------------------------------------------------------------+
-| Synology Drive Monitor v1.1   🟢 流式处理接近平衡             最后活动: 2秒前  [🛠️ 诊断报告] |
-+-----------------------+-----------------------+-----------------------+-----------------+
-|      当前在途         |       净消化速度      |     预计完成 (ETA)     |    同步异常     |
-|         95            |          平衡         |      暂无法稳定估算    |       77        |
-|  Push/Done 实时配对   |  完成 1380 ≈ 新增 1380 |    流式处理接近平衡    | 真实 77 · 临时 13|
-+-----------------------+-----------------------+-----------------------+-----------------+
-| 估算在途事件池趋势 (最近观测)                           | 正在处理 · 下载中               |
-| [==================== Sparkline ====================] | path/to/current/file.docx       |
-+-------------------------------------------------------+---------------------------------+
-| 最近活动 | 同步异常 (需关注)                                                               |
-+-----------------------------------------------------------------------------------------+
++-------------------------------------------------------------------------------------------+
+| Synology Drive Monitor  [正在收敛 · 队列递减]   最后活动: 2 秒前 [诊断报告][导出][刷新][更多▾] |
++-------------------------------------------------------------------------------------------+
+| ▌队列正在变短（在途 95），预计约 12 分钟后完成。 另有 3 个文件未同步，需要关注。              |
++----------------------+----------------------+----------------------+----------------------+
+|      当前在途        |      净消化速度      |    预计完成 (ETA)    |      同步异常        |
+|         95           |      8.0 / min       |     约 12 分钟       |         3            |
+|  Push/Done 实时配对  |  完成 20 · 新增 12   |  基于净消化速度      | 需关注3·临时13·恢复4 |
++----------------------+----------------------+----------------------+----------------------+
+| 在途事件池趋势            正在收敛             | 正在处理 · 下载中                          |
+| [=============== 面积折线 ================]    | 当前文件.docx                              |
+| 每分钟吞吐   完成 ↑ ▂▃▅▆▇▆▅  新增 ↓ ▂▂▃▂▁    | C:\...\当前文件.docx                       |
++------------------------------------------------+------------------------------------------+
+| 筛选 [__________________ ✕]  共 200 条   [临时文件] [已恢复]                               |
+| 最近活动 | 同步异常 (3) | 日志告警 (2)                                                    |
++-------------------------------------------------------------------------------------------+
 ```
 
 ---
@@ -83,7 +97,12 @@ python synology_drive_monitor.py --json
 python synology_drive_monitor.py --json --sample 60
 ```
 
-Exit code `0` = OK, `2` = Synology Drive data directory not found. 该模式只读、不写在途事件池状态文件；打包出的 `--noconsole` exe 没有控制台，JSON 模式请用源码运行。
+```bash
+# 给计划任务 / agent 用：停滞或有需关注的异常时退出码为 1
+python synology_drive_monitor.py --json --sample 60 --fail-on stalled,errors
+```
+
+Exit code `0` = OK, `1` = a `--fail-on` condition was hit (`stalled` / `warning` / `offline` / `errors`, listed in `failed_conditions`), `2` = Synology Drive data directory not found. 该模式只读、不写在途事件池状态文件；打包出的 `--noconsole` exe 没有控制台，JSON 模式请用源码运行。
 
 ### Option 2: Build Standalone EXE (打包为单文件绿色版)
 
@@ -103,13 +122,27 @@ The output executable will be generated at `dist/SynologyDriveMonitor.exe`.
 
 ## 🛠️ Diagnostics & Report (诊断面板)
 
-Click the **`🛠️ 诊断与排查报告`** button on the top right to inspect:
+Click **`诊断报告`** on the top right (or press `Ctrl+D`) to inspect:
 - Process status, monitor uptime, active session, event-db and daemon.log paths
 - Row counts of every table in the active session's `event-db.sqlite` (read-only)
 - In-flight outstanding event pool depth, breakdown by `sync_id`, oldest pending age and expired count
 - PushEvent / DoneEvent stream rates (1m & 5m)
 - Convergence state & sanity check verdicts
-- One-click **`📋 复制诊断报告`** to copy formatted diagnostics for troubleshooting.
+- Error breakdown by reason and by folder, plus the most recent `daemon.log` alert groups
+- **`复制报告`** / **`另存为…`** / **`重新生成`** buttons.
+
+### Keyboard shortcuts (快捷键)
+
+| Key | Action |
+| --- | --- |
+| `F5` | 立即刷新 |
+| `Ctrl+F` / `Esc` | 聚焦筛选框 / 清空筛选 |
+| `Ctrl+E` | 导出当前异常列表为 CSV |
+| `Ctrl+D` | 打开诊断报告 |
+| `Enter` / 双击 | 在资源管理器中定位选中文件 |
+| `Ctrl+C` | 复制选中行的路径（日志告警页为日志内容） |
+
+Click a column header to sort (again to reverse, a third time to restore the default order). Theme, always-on-top and taskbar alerts live under **`更多 ▾`**.
 
 ---
 
@@ -119,6 +152,8 @@ Click the **`🛠️ 诊断与排查报告`** button on the top right to inspect
 - Synology Drive does not expose a static "remaining tasks" counter; all stream rates and convergence indicators are derived from local log observation and event pairing.
 - On startup the tail of `daemon.log` (400 KB) is replayed to rebuild the outstanding pool, but those historical events are **not** counted in the Push/Done rates. 启动回读的历史事件只用于重建在途池，不计入速率。
 - Outstanding events not paired with a `DoneEvent` within 2 hours expire automatically, so a missed log line cannot pin the pool forever.
+- The "可能原因" column and the `[ERROR]` / `[WARNING]` extraction are heuristics based on paths and observed log format; if Synology changes the log format the alerts tab may simply stay empty. "可能原因"与日志告警均为启发式，仅供排查参考。
+- UI preferences are stored in `%LOCALAPPDATA%\SynologyDriveMonitor\settings.json`; nothing is ever written to the Synology Drive directory.
 - Action codes and `not_synced_reason` codes other than `-8192` are empirical mappings, not official Synology documentation. 除 -8192 外的错误 / 动作代码含义为经验映射。
 
 ---
