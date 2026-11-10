@@ -349,3 +349,172 @@ def test_is_temp_file(name, temp):
 def test_normalize_path_dedupes_variants():
     assert core.normalize_path("C:\\\\Docs\\\\A.txt") == core.normalize_path("c:/docs/a.TXT")
     assert core.normalize_path("\\\\nas\\share\\x").startswith("\\\\nas")
+
+
+# ------------------------------------------------------------------ v1.2：进程检测
+def test_own_exe_is_not_mistaken_for_drive_client():
+    # 打包后的 SynologyDriveMonitor.exe 名字里含 "synologydrive"，v1.1 会因此永远显示"运行中"
+    own_only = '"SynologyDriveMonitor.exe","4242","Console","1","30,000 K"\n"explorer.exe","1","Console","1","9 K"\n'
+    assert core.drive_process_running(own_only) is False
+    assert core.drive_process_running(own_only + '"cloud-drive-daemon.exe","77","Console","1","9 K"\n') is True
+    assert core.drive_process_running("") is False
+
+
+# ------------------------------------------------------------------ v1.2：日志告警
+def err_line(n: int, level: str = "ERROR") -> str:
+    return (
+        f"2026-11-06T10:00:0{n % 10} (1234:5678) [{level}] proto-client.cpp({n}): Failed to connect 'nas{n}.example' code {n}\n"
+    )
+
+
+def test_log_alerts_are_grouped_by_kind(base, tmp_path):
+    clock = Clock()
+    r = reader_for(base, tmp_path, clock)
+    r.read_metrics()
+    append(base, err_line(1) + err_line(2) + err_line(3) + err_line(4, "WARNING") + push(1))
+    m = r.read_metrics()
+    assert [(a["level"], a["count"]) for a in m["log_alerts"]] in ([("错误", 3), ("警告", 1)], [("警告", 1), ("错误", 3)])
+    assert m["log_alert_errors"] == 1
+    assert m["outstanding"] == 1  # 告警识别不影响事件配对
+
+
+def test_level_tag_inside_path_is_not_an_alert():
+    assert core.parse_log_alert("2026-11-06T10:00:00 [INFO] PushEvent = Event<X> sync_id: 1 path: 'C:\\[ERROR]\\a.txt'") is None
+    assert core.parse_log_alert("no level here") is None
+    level, msg, _sig = core.parse_log_alert("2026-11-06T10:00:00 [WARN] slow response")
+    assert (level, msg) == ("警告", "slow response")
+
+
+def test_log_alert_groups_are_bounded(base, tmp_path):
+    r = reader_for(base, tmp_path, Clock())
+    for i in range(core.LOG_ALERT_MAX_GROUPS + 20):
+        r._record_log_alert(("错误", f"m{i}", f"sig-{'x' * i}"), float(i))
+    assert len(r.log_alerts) == core.LOG_ALERT_MAX_GROUPS
+
+
+# ------------------------------------------------------------------ v1.2：路径提示与汇总
+@pytest.mark.parametrize(
+    "path,exists,needle",
+    [
+        ("C:\\Docs\\" + "长" * 260 + ".dwg", None, "路径过长"),
+        ("/图纸/a:b?.dwg", None, "不允许的字符"),
+        ("C:\\Docs\\报告.docx ", None, "空格或句点结尾"),
+        ("C:\\Docs\\NUL.txt", None, "保留名称"),
+        ("C:\\Docs\\a_PC01_Conflict.docx", None, "冲突副本"),
+        ("C:\\Docs\\a.docx", False, "本地已不存在"),
+        ("C:\\Docs\\" + "名" * 60 + ".dwg", None, "143 字节"),
+    ],
+)
+def test_path_hints(path, exists, needle):
+    assert any(needle in h for h in core.path_hints(path, exists))
+
+
+def test_path_hints_quiet_for_normal_paths():
+    assert core.path_hints("C:\\Docs\\项目A\\图纸 v2.dwg", True) == []
+    assert core.path_hints("D:\\a.b\\c.txt") == []  # 盘符里的冒号不算非法字符
+    assert core.path_hints("") == []
+
+
+def test_error_breakdown():
+    errs = [
+        {"reason": "占用", "path": "C:\\Docs\\A\\B\\C\\f.txt"},
+        {"reason": "占用", "path": "C:\\Docs\\A\\B\\g.txt"},
+        {"reason": "其他", "path": "x.txt"},
+    ]
+    bd = core.error_breakdown(errs)
+    assert bd["by_reason"][0] == ("占用", 2)
+    assert ("C:\\Docs\\A", 2) in bd["by_folder"] and ("(根目录)", 1) in bd["by_folder"]
+
+
+def test_missing_local_file_gets_hint(base, tmp_path):
+    here = tmp_path / "still_here.txt"
+    here.write_text("x", encoding="utf-8")
+    make_history(base, [(str(tmp_path / "gone.txt"), 1, 1, -2048, 34), (str(here), 2, 1, -2048, 34)])
+    r = reader_for(base, tmp_path, Clock())
+    r.check_local_files = True
+    hints = {Path(e["path"]).name: e["hint"] for e in r.read_metrics(force_history=True)["actionable_errors"]}
+    assert "本地已不存在" in hints["gone.txt"]
+    assert hints["still_here.txt"] == ""
+
+
+def test_local_check_can_be_disabled(base, tmp_path):
+    make_history(base, [(str(tmp_path / "gone.txt"), 1, 1, -2048, 34)])
+    r = reader_for(base, tmp_path, Clock())
+    r.check_local_files = False
+    assert r.read_metrics(force_history=True)["actionable_errors"][0]["hint"] == ""
+
+
+# ------------------------------------------------------------------ v1.2：吞吐序列与摘要
+def test_rate_series_buckets_live_events(base, tmp_path):
+    clock = Clock()
+    r = reader_for(base, tmp_path, clock)
+    r.read_metrics()
+    append(base, push(1) + push(2) + done(1))
+    r.read_metrics()
+    clock.advance(130)
+    append(base, done(2))
+    series = r.read_metrics()["rate_series"]
+    assert len(series) == core.RATE_SERIES_MINUTES
+    assert series[-1] == (0, 1)  # 最近一分钟：1 个完成
+    assert series[-3] == (2, 1)  # 两分多钟前：2 个新增 + 1 个完成
+    assert sum(p for p, _ in series) == 2 and sum(d for _, d in series) == 2
+
+
+def test_backlog_is_not_in_rate_series(base, tmp_path):
+    append(base, "".join(push(i) for i in range(50)))
+    r = reader_for(base, tmp_path, Clock())
+    assert all(v == (0, 0) for v in r.read_metrics()["rate_series"])
+
+
+def test_summary_reflects_state(base, tmp_path):
+    make_history(base, [("C:\\a.txt", 1, 1, -2048, 34)])
+    clock = Clock()
+    r = reader_for(base, tmp_path, clock)
+    m = r.read_metrics(force_history=True)
+    assert m["summary_level"] == "warn" and "1 个文件未同步" in m["summary"]
+
+    append(base, push(1))
+    r.read_metrics()
+    clock.advance(core.STALL_ALERT_SECS + 5)
+    m = r.read_metrics()
+    assert m["summary_level"] == "bad" and "没有任何进展" in m["summary"]
+
+
+def test_summary_idle_is_ok(base, tmp_path):
+    clock = Clock()
+    r = reader_for(base, tmp_path, clock)
+    r.read_metrics()
+    clock.advance(600)
+    m = r.read_metrics()
+    assert (m["summary_level"], m["summary"]) == ("ok", "同步已完成，当前空闲。")
+
+
+def test_check_failures():
+    m = {"stall_status": "stalled", "actionable_errors_count": 2}
+    assert core.check_failures(m, ["stalled", "errors", "offline"]) == ["stalled", "errors"]
+    assert core.check_failures({"stall_status": "active", "actionable_errors_count": 0}, core.FAIL_CONDITIONS) == []
+
+
+# ------------------------------------------------------------------ v1.2：设置
+def test_settings_roundtrip_and_fallback(tmp_path):
+    p = tmp_path / "cfg" / "settings.json"
+    assert core.load_settings(p) == core.DEFAULT_SETTINGS  # 文件不存在
+    s = dict(core.DEFAULT_SETTINGS, theme="dark", topmost=True, geometry="1300x900")
+    assert core.save_settings(s, p) is True
+    assert core.load_settings(p) == s
+
+    p.write_text('{"theme": "neon", "topmost": "yes", "extra": 1}', encoding="utf-8")
+    assert core.load_settings(p) == core.DEFAULT_SETTINGS  # 非法值逐项回落
+    p.write_text("{not json", encoding="utf-8")
+    assert core.load_settings(p) == core.DEFAULT_SETTINGS
+
+
+def test_snapshot_includes_new_fields(base, tmp_path):
+    make_history(base, [("C:\\Docs\\NUL.txt", 1, 1, -2048, 34)])
+    r = reader_for(base, tmp_path, Clock())
+    snap = core.snapshot(r, r.read_metrics(force_history=True))
+    json.dumps(snap, ensure_ascii=False)
+    assert "保留名称" in snap["actionable_errors"][0]["hint"]
+    assert snap["error_breakdown"]["by_reason"] and snap["summary"]
+    report = core.build_diagnostics_report(r, r.read_metrics())
+    assert "按原因" in report and "daemon.log 告警" in report
