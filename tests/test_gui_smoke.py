@@ -54,7 +54,8 @@ def test_cli_fail_on(base, capsys):
     assert gui.main(["--json", "--base", str(base), "--fail-on", "errors,stalled"]) == 1
     out = json.loads(capsys.readouterr().out)
     assert out["failed_conditions"] == ["errors"]
-    assert gui.main(["--json", "--base", str(base), "--fail-on", "offline"]) == 0
+    # 用 warning 而不是 offline：Windows CI 上确实没有运行群晖客户端，offline 会真的命中
+    assert gui.main(["--json", "--base", str(base), "--fail-on", "warning"]) == 0
     capsys.readouterr()
     with pytest.raises(SystemExit):
         gui.main(["--json", "--base", str(base), "--fail-on", "nonsense"])
