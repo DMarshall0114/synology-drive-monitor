@@ -125,6 +125,10 @@ def test_gui_smoke(base):
         app.copy_selected(app.err_tree)
         app.copy_selected(app.err_tree, name_only=True)
         app.copy_summary()
+        # 次要按钮与表格单元格提示在深浅两套色板下都有定义
+        for theme in ("light", "dark"):
+            assert gui.PALETTES[theme]["control_border"] != gui.PALETTES[theme]["surface"]
+        app._reveal_recent_file(0)  # 没有记录时不应报错
         app._build_more_menu()  # 只构建不弹出：Windows 上弹出菜单会阻塞到用户关闭
         app.open_diagnostics()
         app.refresh_now()

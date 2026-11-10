@@ -52,6 +52,9 @@ PALETTES: dict[str, dict[str, str]] = {
         "accent_hover": "#005A9E",
         "accent_bg": "#E5F1FB",
         "on_accent": "#FFFFFF",
+        "control": "#FBFBFB",  # 次要按钮底色
+        "control_hover": "#EEF0F2",
+        "control_border": "#C9CED6",
         "green": "#107C10",
         "blue": "#0067C0",
         "orange": "#B8500A",
@@ -72,6 +75,9 @@ PALETTES: dict[str, dict[str, str]] = {
         "accent_hover": "#7AD3FF",
         "accent_bg": "#143A52",
         "on_accent": "#00243A",
+        "control": "#3A3A3A",
+        "control_hover": "#454545",
+        "control_border": "#5C5C5C",
         "green": "#6CCB5F",
         "blue": "#4CC2FF",
         "orange": "#FCA65C",
@@ -98,6 +104,9 @@ class Theme:
     accent_hover: str
     accent_bg: str
     on_accent: str
+    control: str
+    control_hover: str
+    control_border: str
     green: str
     blue: str
     orange: str
@@ -268,6 +277,62 @@ class ToolTip:
             self.tip = None
 
 
+class CellTip:
+    """表格单元格内容被列宽截断时，悬停显示全文（多条提示按"；"分行）。"""
+
+    def __init__(self, tree: ttk.Treeview):
+        self.tree = tree
+        self.tip: Toplevel | None = None
+        self.key: tuple[str, str] | None = None
+        self.measure = tkfont.Font(font=font(9))
+        tree.bind("<Motion>", self._motion, add="+")
+        tree.bind("<Leave>", self._hide, add="+")
+        tree.bind("<Destroy>", self._hide, add="+")
+        tree.bind("<MouseWheel>", self._hide, add="+")
+
+    def _motion(self, event):
+        row, col = self.tree.identify_row(event.y), self.tree.identify_column(event.x)
+        if (row, col) == self.key:
+            return
+        self._hide()
+        self.key = (row, col)
+        if not row or not col.startswith("#"):
+            return
+        try:
+            idx = int(col[1:]) - 1
+            text = str(self.tree.item(row, "values")[idx])
+            width = int(self.tree.column(col, "width"))
+        except (ValueError, IndexError, tk.TclError):
+            return
+        if not text or self.measure.measure(text) + 16 <= width:
+            return  # 没被截断就不打扰
+        self.tip = tw = Toplevel(self.tree)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{event.x_root + 14}+{event.y_root + 18}")
+        tk.Label(
+            tw,
+            text=text.replace("；", "\n"),
+            justify="left",
+            wraplength=560,
+            font=font(9),
+            bg=C.surface,
+            fg=C.text,
+            highlightbackground=C.border,
+            highlightthickness=1,
+            padx=10,
+            pady=6,
+        ).pack()
+
+    def _hide(self, _event=None):
+        self.key = None
+        if self.tip:
+            try:
+                self.tip.destroy()
+            except tk.TclError:
+                pass
+            self.tip = None
+
+
 def card_frame(parent, **kwargs) -> tk.Frame:
     return tk.Frame(parent, bg=C.surface, highlightbackground=C.border, highlightthickness=1, **kwargs)
 
@@ -402,7 +467,7 @@ class Chip(tk.Label):
 
 
 def fluent_button(parent, text: str, command, primary: bool = False, small: bool = False, tooltip: str = "") -> tk.Button:
-    normal, hover = (C.accent, C.accent_hover) if primary else (C.surface, C.hover)
+    normal, hover = (C.accent, C.accent_hover) if primary else (C.control, C.control_hover)
     btn = tk.Button(
         parent,
         text=text,
@@ -417,7 +482,7 @@ def fluent_button(parent, text: str, command, primary: bool = False, small: bool
         fg=C.on_accent if primary else C.text,
         activebackground=hover,
         activeforeground=C.on_accent if primary else C.text,
-        highlightbackground=C.accent if primary else C.border,
+        highlightbackground=C.accent if primary else C.control_border,
         highlightthickness=1,
     )
     btn.bind("<Enter>", lambda e: btn.configure(bg=hover), add="+")
@@ -434,8 +499,8 @@ TREE_COLUMNS: dict[str, list[tuple[str, str, int, bool]]] = {
         ("time", "时间", 150, False),
         ("status", "状态", 76, False),
         ("raw_code", "代码", 66, False),
-        ("reason", "群晖记录的原因", 240, False),
-        ("hint", "可能原因（本工具按路径推断）", 260, False),
+        ("reason", "群晖记录的原因", 210, False),
+        ("hint", "可能原因（本工具按路径推断）", 380, False),
         ("path", "文件路径", 420, True),
     ],
     "alerts": [
@@ -761,6 +826,23 @@ class App:
 
         curr.bind("<Configure>", rewrap)
 
+        tk.Frame(curr, bg=C.border, height=1).pack(fill="x", pady=(10, 6))
+        tk.Label(curr, text="此前处理", font=font(8, bold=True), fg=C.text2, bg=C.surface, anchor="w").pack(fill="x")
+        self.recent_files_box = tk.Frame(curr, bg=C.surface)
+        self.recent_files_box.pack(fill="both", expand=True, pady=(2, 0))
+        self._recent_file_rows: list[tuple[tk.Label, tk.Label]] = []
+        self._recent_file_paths: list[str] = ["", "", "", ""]
+        for i in range(4):
+            row = tk.Frame(self.recent_files_box, bg=C.surface)
+            row.pack(fill="x")
+            t = tk.Label(row, font=font(8), fg=C.muted, bg=C.surface, width=8, anchor="w")
+            t.pack(side="left")
+            n = tk.Label(row, font=font(8), fg=C.text2, bg=C.surface, anchor="w", cursor="hand2")
+            n.pack(side="left", fill="x", expand=True)
+            n.bind("<Double-1>", lambda e, i=i: self._reveal_recent_file(i))
+            self._recent_file_rows.append((t, n))
+        ToolTip([n for _, n in self._recent_file_rows], "双击在资源管理器中定位")
+
         self.proc_var = StringVar(value="")
         tk.Label(curr, textvariable=self.proc_var, font=font(8), fg=C.muted, bg=C.surface, justify="left", anchor="w").pack(
             side="bottom", fill="x"
@@ -859,6 +941,7 @@ class App:
             tree.bind("<Double-1>", lambda e: self.reveal_selected(tree))
             tree.bind("<Return>", lambda e: self.reveal_selected(tree))
         tree.bind("<Control-c>", lambda e: self.copy_selected(tree))
+        CellTip(tree)
         self._bind_context_menu(tree, has_path)
         self._refresh_headings(name, tree)
         return tree
@@ -1046,6 +1129,17 @@ class App:
             self.curr_file_var.set("等待捕获文件活动…")
             self.curr_path_var.set("正在进行目录比对或空闲中")
         self.proc_var.set(f"客户端进程: {m['process_state']}  ·  Session {m['session_id']}")
+        recent_files = m.get("recent_files", [])
+        for i, (t_lbl, n_lbl) in enumerate(self._recent_file_rows):
+            if i < len(recent_files):
+                rf = recent_files[i]
+                t_lbl.configure(text=rf["time"])
+                n_lbl.configure(text=f"{rf['action']} · {shorten_middle(Path(rf['path'].replace(chr(92), '/')).name, 48)}")
+                self._recent_file_paths[i] = rf["path"]
+            else:
+                t_lbl.configure(text="")
+                n_lbl.configure(text="—" if i == 0 and not recent_files else "")
+                self._recent_file_paths[i] = ""
 
         self._apply_filter()
         sb = f"Drive: {m['process_state']} | Session {m['session_id']} | 严格只读"
@@ -1256,6 +1350,10 @@ class App:
             f"同步异常: 需关注 {m['actionable_errors_count']} · 临时 {m['office_temp_count']} · 已恢复 {m['recovered_count']}",
         ]
         self._copy("\n".join(lines), "状态摘要")
+
+    def _reveal_recent_file(self, i: int):
+        if self._recent_file_paths[i]:
+            self._reveal_path(self._recent_file_paths[i])
 
     def reveal_current(self):
         if self._current_path:

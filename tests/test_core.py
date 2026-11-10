@@ -518,3 +518,22 @@ def test_snapshot_includes_new_fields(base, tmp_path):
     assert snap["error_breakdown"]["by_reason"] and snap["summary"]
     report = core.build_diagnostics_report(r, r.read_metrics())
     assert "按原因" in report and "daemon.log 告警" in report
+
+
+def test_recent_files_tracks_processed_files(base, tmp_path):
+    clock = Clock()
+    r = reader_for(base, tmp_path, clock)
+    r.read_metrics()
+
+    def up(name: str) -> str:
+        return f"2026-11-06T10:00:00 [INFO] Upload file 'C:\\Docs\\{name}' size=1\n"
+
+    append(base, up("a.dwg") + up("a.dwg") + up("b.docx") + up("c.xlsx"))
+    m = r.read_metrics()
+    assert m["current_file"] == "C:\\Docs\\c.xlsx"
+    # 当前文件不重复列出，连续同一文件只记一次，最新在前
+    assert [f["path"] for f in m["recent_files"]] == ["C:\\Docs\\b.docx", "C:\\Docs\\a.dwg"]
+    assert m["recent_files"][0]["action"] == "上传中"
+    for i in range(core.RECENT_FILES_MAX + 5):
+        append(base, up(f"n{i}.txt"))
+    assert len(r.read_metrics()["recent_files"]) == core.RECENT_FILES_MAX - 1

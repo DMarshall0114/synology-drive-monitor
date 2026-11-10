@@ -45,6 +45,7 @@ LOW_RATE_PER_MIN = 5.0  # 低于该速率视为"几乎无事件流"
 STALL_WARN_SECS = 300
 STALL_ALERT_SECS = 900
 CURRENT_FILE_STALE_SECS = 25
+RECENT_FILES_MAX = 8  # "正在处理"卡片下方列出的最近文件数
 RATE_SERIES_MINUTES = 15  # 每分钟吞吐图覆盖的分钟数
 LOG_ALERT_MAX_GROUPS = 200  # daemon.log 告警最多保留的分组数
 LOCAL_CHECK_MAX = 300  # 每次最多核对多少个异常文件在本地是否仍存在
@@ -457,6 +458,8 @@ class DriveReader:
         self.last_log_action = "空闲"
         self.current_processing_file = ""
         self.current_file_last_seen = 0.0
+        # 最近处理过的文件 (时间, 动作, 路径)，最新在右；连续同一文件只记一次
+        self.recent_files: deque[tuple[float, str, str]] = deque(maxlen=RECENT_FILES_MAX)
 
         # history.sqlite 查询缓存
         self._history_sig: tuple | None = None
@@ -679,6 +682,10 @@ class DriveReader:
                         self.last_log_action = "下载中"
                     else:
                         self.last_log_action = "流式处理"
+                    if self.recent_files and self.recent_files[-1][2] == fpath:
+                        self.recent_files[-1] = (ts, self.last_log_action, fpath)
+                    else:
+                        self.recent_files.append((ts, self.last_log_action, fpath))
 
         if backlog:
             self.diag["backlog_events"] = backlog_events
@@ -1014,6 +1021,12 @@ class DriveReader:
             "stall_desc": stall_desc,
             "idle_secs": idle,
             "current_file": self.current_processing_file,
+            # 不含当前文件，最新在前
+            "recent_files": [
+                {"time": datetime.fromtimestamp(t).strftime("%H:%M:%S"), "action": a, "path": f}
+                for t, a, f in reversed(self.recent_files)
+                if f != self.current_processing_file
+            ],
             "active_label": active_label,
             "remaining_samples": list(self.remaining_samples),
             "rate_series": self._rate_series(now),
